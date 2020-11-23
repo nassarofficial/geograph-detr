@@ -150,7 +150,7 @@ def build(image_set, args):
     mode = 'instances'
     PATHS = {
         "train": (root / str(args.instance+'_train_all'), root / "annotations" / str('instances_'+args.instance+'_train_all.json')),
-        "val": (root / str(args.instance+'_vall_all'), root / "annotations" / str('instances_'+args.instance+'_val_all.json')),
+        "val": (root / str(args.instance+'_val_all'), root / "annotations" / str('instances_'+args.instance+'_val_all.json')),
     }
     print(PATHS)
 
