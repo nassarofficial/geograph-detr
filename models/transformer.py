@@ -79,7 +79,7 @@ class TransformerEncoder(nn.Module):
 
         if self.norm is not None:
             output = self.norm(output)
-
+        print("Out - transformer encoder: ", output.shape)
         return output
 
 
@@ -120,6 +120,7 @@ class TransformerDecoder(nn.Module):
 
         if self.return_intermediate:
             return torch.stack(intermediate)
+        print("Out - transformer decoder: ", output.shape)
 
         return output.unsqueeze(0)
 

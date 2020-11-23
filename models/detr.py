@@ -58,14 +58,19 @@ class DETR(nn.Module):
         """
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
+        print("Out - samples: ", samples.tensors.shape)
         features, pos = self.backbone(samples)
-
+        print("Out - features: ", len(features))
+        print("Out - features[0]: ", features[0].tensors.shape)
         src, mask = features[-1].decompose()
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-
+        print("Out - hs: ", hs.shape)
         outputs_class = self.class_embed(hs)
+        print("Out - outputs_class: ", outputs_class.shape)
+        #GNN Goes here.
         outputs_coord = self.bbox_embed(hs).sigmoid()
+        print("Out - outputs_coord: ", outputs_coord.shape)
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
@@ -310,7 +315,7 @@ def build(args):
     # you should pass `num_classes` to be 2 (max_obj_id + 1).
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 20 if args.dataset_file != 'coco' else 91
+    num_classes = args.classes
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
