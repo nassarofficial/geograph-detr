@@ -149,8 +149,8 @@ def build(image_set, args):
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
     PATHS = {
-        "train": (root / args.instance, root / "annotations" / str('instances_'+args.instance+'.json')),
-        "val": (root / args.instance, root / "annotations" / str('instances_'+args.instance+'.json')),
+        "train": (root / str(args.instance+'_train_all'), root / "annotations" / str('instances_'+args.instance+'_train_all.json')),
+        "val": (root / str(args.instance++'_vall_all', root / "annotations" / str('instances_'+args.instance+'_val_all.json')),
     }
     print(PATHS)
 
