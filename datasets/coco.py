@@ -10,6 +10,9 @@ import torch
 import torch.utils.data
 import torchvision
 from pycocotools import mask as coco_mask
+from PIL import Image
+import os
+import os.path
 
 import datasets.transforms as T
 
@@ -19,15 +22,29 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
+        self.ids = [0]
+        self.ids_map = {0:[7,8, 9,10,9,10]}
 
     def __getitem__(self, idx):
-        img, target = super(CocoDetection, self).__getitem__(idx)
-        image_id = self.ids[idx]
-        target = {'image_id': image_id, 'annotations': target}
-        img, target = self.prepare(img, target)
-        if self._transforms is not None:
-            img, target = self._transforms(img, target)
-        return img, target
+        print("idx: ", idx)
+        img_batch, target_batch = [], []
+        instances = self.ids_map[idx]
+        for i in range(len(instances)):
+            print(instances[i])
+            img_id = instances[i]
+            ann_ids = self.coco.getAnnIds(imgIds=img_id)
+            target = self.coco.loadAnns(ann_ids)
+            path = self.coco.loadImgs(img_id)[0]['file_name']
+            img = Image.open(os.path.join(self.root, path)).convert('RGB')
+
+            image_id = img_id
+            target = {'image_id': image_id, 'annotations': target}
+            img, target = self.prepare(img, target)
+            if self._transforms is not None:
+                img, target = self._transforms(img, target)
+            img_batch.append(img)
+            target_batch.append(target)
+        return img_batch, target_batch
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -154,6 +171,12 @@ def build(image_set, args):
             "train": (root / 'sv_sample_all', root / "annotations" / 'instances_sv_sample_all.json'),
             "val": (root / 'sv_sample_all', root / "annotations" / 'instances_sv_sample_all.json'),
         }
+    elif args.instance == "sv_sample_multi":
+        PATHS = {
+            "train": (root / 'sv_sample_all', root / "annotations" / 'instances_sv_sample_multi.json'),
+            "val": (root / 'sv_sample_all', root / "annotations" / 'instances_sv_sample_multi.json'),
+        }
+
     else:
         PATHS = {
             "train": (root / str(args.instance+'_train_all'), root / "annotations" / str('instances_'+args.instance+'_train_all.json')),
@@ -162,5 +185,6 @@ def build(image_set, args):
         print(PATHS)
 
     img_folder, ann_file = PATHS[image_set]
+
     dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks)
     return dataset
