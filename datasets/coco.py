@@ -23,14 +23,13 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
         self.ids = [0]
-        self.ids_map = {0:[7,8, 9,10,9,10]}
+        self.ids_map = {0:[7,8,9,10]}
 
     def __getitem__(self, idx):
         print("idx: ", idx)
         img_batch, target_batch = [], []
         instances = self.ids_map[idx]
         for i in range(len(instances)):
-            print(instances[i])
             img_id = instances[i]
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             target = self.coco.loadAnns(ann_ids)

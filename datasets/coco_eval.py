@@ -36,7 +36,9 @@ class CocoEvaluator(object):
     def update(self, predictions):
         img_ids = list(np.unique(list(predictions.keys())))
         self.img_ids.extend(img_ids)
-
+        # print(self.img_ids)
+        # print(self.coco_eval)
+        # exit()
         for iou_type in self.iou_types:
             results = self.prepare(predictions, iou_type)
 

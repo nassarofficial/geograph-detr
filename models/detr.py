@@ -17,6 +17,9 @@ from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
 
+import subprocess
+import re
+command = 'nvidia-smi'
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -41,6 +44,7 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
+
     def forward(self, samples: NestedTensor):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
@@ -56,25 +60,36 @@ class DETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
-        if isinstance(samples, (list, torch.Tensor)):
-            samples = nested_tensor_from_tensor_list(samples)
-        # print("Out - samples: ", samples.tensors.shape)
-        features, pos = self.backbone(samples)
-        # print("Out - features: ", len(features))
-        # print("Out - features[0]: ", features[0].tensors.shape)
-        src, mask = features[-1].decompose()
-        assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-        # print("Out - hs: ", hs.shape)
-        outputs_class = self.class_embed(hs)
-        # print("Out - outputs_class: ", outputs_class.shape)
-        #GNN Goes here.
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        # print("Out - outputs_coord: ", outputs_coord.shape)
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-        return out
+        features_ls, pos_ls, out_ls = [], [], []
+        for i in range(samples.tensors.shape[0]):
+            out = {}
+            if isinstance([samples.tensors[i,:,:,:]], (list, torch.Tensor)):
+                samp = nested_tensor_from_tensor_list([samples.tensors[i,:,:,:]])
+            features, pos = self.backbone(samp)
+            src, mask = features[-1].decompose()
+
+            # print("src.shape: ", src.shape)
+            assert mask is not None
+            hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+
+            # print("Out - hs: ", hs.shape)
+            outputs_class = self.class_embed(hs)
+
+            # print("Out - outputs_class: ", outputs_class.shape)
+            #GNN Goes here.
+            outputs_coord = self.bbox_embed(hs).sigmoid()
+            # print("Out - outputs_class: ", self.bbox_embed(hs).shape)
+            # print("Out - outputs_coord: ", outputs_coord.shape)
+            # print("Out - hs: ", hs[-1].shape)
+
+            out['pred_logits'] = outputs_class[-1]
+            out['pred_boxes'] = outputs_coord[-1]
+            out['feats_last_layer'] = hs[-1]
+            
+            if self.aux_loss:
+                out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            out_ls.append(out)
+        return out_ls
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -224,39 +239,42 @@ class SetCriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
+        losses = {}
+        indices_ls, num_boxes_ls = [], []
+        for i in range(len(outputs)):
+            outputs_without_aux = {k: v for k, v in outputs[i].items() if k != 'aux_outputs'}
+            target_inst = [targets[i]]
+            # Retrieve the matching between the outputs of the last layer and the targets
+            indices = self.matcher(outputs_without_aux, target_inst)
 
-        # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets)
-
-        print("Out indices: ", indices)
-        # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+            # Compute the average number of target boxes accross all nodes, for normalization purposes
+            num_boxes = sum(len(t["labels"]) for t in target_inst)
+            num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs[i].values())).device)
+            if is_dist_avail_and_initialized():
+                torch.distributed.all_reduce(num_boxes)
+            num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+            indices_ls.append(indices) 
+            num_boxes_ls.append(num_boxes)
 
         # Compute all the requested losses
-        losses = {}
-        for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+            for loss in self.losses:
+                losses.update(self.get_loss(loss, outputs[i], target_inst, indices, num_boxes))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
-        if 'aux_outputs' in outputs:
-            for i, aux_outputs in enumerate(outputs['aux_outputs']):
-                indices = self.matcher(aux_outputs, targets)
-                for loss in self.losses:
-                    if loss == 'masks':
-                        # Intermediate masks losses are too costly to compute, we ignore them.
-                        continue
-                    kwargs = {}
-                    if loss == 'labels':
-                        # Logging is enabled only for the last layer
-                        kwargs = {'log': False}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
-                    l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
-                    losses.update(l_dict)
+            if 'aux_outputs' in outputs[i]:
+                for i, aux_outputs in enumerate(outputs[i]['aux_outputs']):
+                    indices = self.matcher(aux_outputs, target_inst)
+                    for loss in self.losses:
+                        if loss == 'masks':
+                            # Intermediate masks losses are too costly to compute, we ignore them.
+                            continue
+                        kwargs = {}
+                        if loss == 'labels':
+                            # Logging is enabled only for the last layer
+                            kwargs = {'log': False}
+                        l_dict = self.get_loss(loss, aux_outputs, target_inst, indices, num_boxes, **kwargs)
+                        l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
+                        losses.update(l_dict)
 
         return losses
 
@@ -272,22 +290,24 @@ class PostProcess(nn.Module):
                           For evaluation, this must be the original image size (before any data augmentation)
                           For visualization, this should be the image size after data augment, but before padding
         """
-        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+        print(target_sizes)
+        results = []
+        for i in range(len(outputs)):
+            out_logits, out_bbox = outputs[i]['pred_logits'], outputs[i]['pred_boxes']
+            assert len(out_logits) == len([target_sizes[i]])
+            assert target_sizes.shape[1] == 2
 
-        assert len(out_logits) == len(target_sizes)
-        assert target_sizes.shape[1] == 2
+            prob = F.softmax(out_logits, -1)
+            scores, labels = prob[..., :-1].max(-1)
 
-        prob = F.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+            # convert to [x0, y0, x1, y1] format
+            boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
+            # and from relative [0, 1] to absolute [0, height] coordinates
+            img_h, img_w = target_sizes.unbind(1)
+            scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+            boxes = boxes * scale_fct[:, None, :]
 
-        # convert to [x0, y0, x1, y1] format
-        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
-        # and from relative [0, 1] to absolute [0, height] coordinates
-        img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-        boxes = boxes * scale_fct[:, None, :]
-
-        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+            results.append([{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)][0])
 
         return results
 
@@ -334,7 +354,6 @@ def build(args):
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
     )
-
     matcher = build_matcher(args)
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef

@@ -16,26 +16,6 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 
-from util import box_ops
-from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
-                       accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized)
-
-from models.backbone import build_backbone
-from models.detr import MLP, SetCriterion, PostProcess
-from models.matcher import build_matcher
-from models.segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
-                           dice_loss, sigmoid_focal_loss)
-from models.transformer import build_transformer
-from torch import nn
-
-@torch.jit.unused
-def _set_aux_loss(self, outputs_class, outputs_coord):
-    # this is a workaround to make torchscript happy, as torchscript
-    # doesn't support dictionary with non-homogeneous values, such
-    # as a dict having both a Tensor and a list.
-    return [{'pred_logits': a, 'pred_boxes': b}
-            for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -118,7 +98,7 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--num_workers', default=1, type=int)
 
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
@@ -143,40 +123,13 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
+    model, criterion, postprocessors = build_model(args)
+    model.to(device)
 
-    num_classes = args.classes
-
-    device = torch.device(args.device)
-
-    backbone = build_backbone(args)
-
-    transformer = build_transformer(args)
-
-    matcher = build_matcher(args)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = args.giou_loss_coef
-    num_queries = args.num_queries
-    hidden_dim = transformer.d_model
-    class_embed = nn.Linear(hidden_dim, num_classes + 1)
-    bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-    query_embed = nn.Embedding(num_queries, hidden_dim)
-    input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
-
-    # TODO this is a hack
-    if args.aux_loss:
-        aux_weight_dict = {}
-        for i in range(args.dec_layers - 1):
-            aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
-        weight_dict.update(aux_weight_dict)
-
-    losses = ['labels', 'boxes', 'cardinality']
-
-    criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
-    criterion.to(device)
-    postprocessors = {'bbox': PostProcess()}
-
-
+    model_without_ddp = model
+    if args.distributed:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
@@ -239,117 +192,54 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
-
-    ## EPOCHS
     for epoch in range(args.start_epoch, args.epochs):
-        self.backbone.train()
-        self.transformer.train()
-        criterion.train()
-        metric_logger = utils.MetricLogger(delimiter="  ")
-        metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-        metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
-        header = 'Epoch: [{}]'.format(epoch)
-        print_freq = 10
-
-        for samples, targets in metric_logger.log_every(data_loader_train, print_freq, header):
-            samples = samples.to(device)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            if isinstance(samples, (list, torch.Tensor)):
-                samples = nested_tensor_from_tensor_list(samples)
-            print("Out - samples: ", samples.tensors.shape)
-            features, pos = self.backbone(samples)
-            print("Out - features: ", len(features))
-            print("Out - features[0]: ", features[0].tensors.shape)
-            src, mask = features[-1].decompose()
-            assert mask is not None
-            hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
-            print("Out - hs: ", hs.shape)
-            outputs_class = self.class_embed(hs)
-            print("Out - outputs_class: ", outputs_class.shape)
-            #GNN Goes here.
-            outputs_coord = self.bbox_embed(hs).sigmoid()
-            print("Out - outputs_coord: ", outputs_coord.shape)
-            out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
-            if self.aux_loss:
-                out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-
-            loss_dict = criterion(outputs, targets)
-            weight_dict = criterion.weight_dict
-            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
-
-            # reduce losses over all GPUs for logging purposes
-            loss_dict_reduced = utils.reduce_dict(loss_dict)
-            loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                          for k, v in loss_dict_reduced.items()}
-            loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                        for k, v in loss_dict_reduced.items() if k in weight_dict}
-            losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
-
-            loss_value = losses_reduced_scaled.item()
-
-            if not math.isfinite(loss_value):
-                print("Loss is {}, stopping training".format(loss_value))
-                print(loss_dict_reduced)
-                sys.exit(1)
-
-            optimizer.zero_grad()
-            losses.backward()
-            if max_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-            optimizer.step()
-
-            metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
-            metric_logger.update(class_error=loss_dict_reduced['class_error'])
-            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        # gather the stats from all processes
-        metric_logger.synchronize_between_processes()
-        print("Averaged stats:", metric_logger)
-
-
-
+        if args.distributed:
+            sampler_train.set_epoch(epoch)
+        train_stats = train_one_epoch(
+            model, criterion, data_loader_train, optimizer, device, epoch,
+            args.clip_max_norm)
         lr_scheduler.step()
-    #     if args.output_dir:
-    #         checkpoint_paths = [output_dir / 'checkpoint.pth']
-    #         # extra checkpoint before LR drop and every 100 epochs
-    #         if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-    #             checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
-    #         for checkpoint_path in checkpoint_paths:
-    #             utils.save_on_master({
-    #                 'model': model_without_ddp.state_dict(),
-    #                 'optimizer': optimizer.state_dict(),
-    #                 'lr_scheduler': lr_scheduler.state_dict(),
-    #                 'epoch': epoch,
-    #                 'args': args,
-    #             }, checkpoint_path)
+        if args.output_dir:
+            checkpoint_paths = [output_dir / 'checkpoint.pth']
+            # extra checkpoint before LR drop and every 100 epochs
+            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
+                checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
+            for checkpoint_path in checkpoint_paths:
+                utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'epoch': epoch,
+                    'args': args,
+                }, checkpoint_path)
 
-    #     test_stats, coco_evaluator = evaluate(
-    #         model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
-    #     )
+        test_stats, coco_evaluator = evaluate(
+            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+        )
 
-    #     log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-    #                  **{f'test_{k}': v for k, v in test_stats.items()},
-    #                  'epoch': epoch,
-    #                  'n_parameters': n_parameters}
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                     **{f'test_{k}': v for k, v in test_stats.items()},
+                     'epoch': epoch,
+                     'n_parameters': n_parameters}
 
-    #     if args.output_dir and utils.is_main_process():
-    #         with (output_dir / "log.txt").open("a") as f:
-    #             f.write(json.dumps(log_stats) + "\n")
+        if args.output_dir and utils.is_main_process():
+            with (output_dir / "log.txt").open("a") as f:
+                f.write(json.dumps(log_stats) + "\n")
 
-    #         # for evaluation logs
-    #         if coco_evaluator is not None:
-    #             (output_dir / 'eval').mkdir(exist_ok=True)
-    #             if "bbox" in coco_evaluator.coco_eval:
-    #                 filenames = ['latest.pth']
-    #                 if epoch % 50 == 0:
-    #                     filenames.append(f'{epoch:03}.pth')
-    #                 for name in filenames:
-    #                     torch.save(coco_evaluator.coco_eval["bbox"].eval,
-    #                                output_dir / "eval" / name)
+            # for evaluation logs
+            if coco_evaluator is not None:
+                (output_dir / 'eval').mkdir(exist_ok=True)
+                if "bbox" in coco_evaluator.coco_eval:
+                    filenames = ['latest.pth']
+                    if epoch % 50 == 0:
+                        filenames.append(f'{epoch:03}.pth')
+                    for name in filenames:
+                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
+                                   output_dir / "eval" / name)
 
-    # total_time = time.time() - start_time
-    # total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    # print('Training time {}'.format(total_time_str))
+    total_time = time.time() - start_time
+    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    print('Training time {}'.format(total_time_str))
 
 
 if __name__ == '__main__':

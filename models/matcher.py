@@ -52,11 +52,16 @@ class HungarianMatcher(nn.Module):
             For each batch element, it holds:
                 len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
         """
+        # print("len(outputs[pred_logits])", len(outputs["pred_logits"]))
+        # print("Out: 2 len(outputs), len(targets)", len(outputs), len(targets))
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
+        # print("Out: bs, num_queries", bs, num_queries)
         # We flatten to compute the cost matrices in a batch
         out_prob = outputs["pred_logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
+        # print("Out: out_prob", out_prob.shape)
+        # print("Out: out_bbox", out_bbox.shape)
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["labels"] for v in targets])
@@ -78,6 +83,9 @@ class HungarianMatcher(nn.Module):
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [len(v["boxes"]) for v in targets]
+        # print("Out: sizes", len(sizes))
+        # print("Out: -------------------------")
+
         indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
