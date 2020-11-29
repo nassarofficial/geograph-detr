@@ -33,7 +33,6 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             img_id = instances[i]
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             target = self.coco.loadAnns(ann_ids)
-            print(target)
             path = self.coco.loadImgs(img_id)[0]['file_name']
             img = Image.open(os.path.join(self.root, path)).convert('RGB')
 
@@ -142,7 +141,6 @@ class ConvertCocoPolysToMask(object):
 
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
         target["size"] = torch.as_tensor([int(h), int(w)])
-        print("coco: ", target)
         return image, target
 
 

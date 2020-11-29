@@ -257,13 +257,12 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         losses = {}
-        indices_ls, num_boxes_ls = [], []
+        indices_ls, num_boxes_ls, num_boxes_ls = [], [], [] 
         for i in range(len(outputs)):
             outputs_without_aux = {k: v for k, v in outputs[i].items() if k != 'aux_outputs'}
             target_inst = [targets[i]]
-            print("target_inst: ",target_inst)
             # Retrieve the matching between the outputs of the last layer and the targets
-            indices = self.matcher(outputs_without_aux, target_inst)
+            indices, target_indices = self.matcher(outputs_without_aux, target_inst)
 
             # Compute the average number of target boxes accross all nodes, for normalization purposes
             num_boxes = sum(len(t["labels"]) for t in target_inst)
@@ -273,7 +272,7 @@ class SetCriterion(nn.Module):
             num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
             indices_ls.append(indices) 
             num_boxes_ls.append(num_boxes)
-
+            target_indices.append(target_indices)
         # Compute all the requested losses
             for loss in self.losses:
                 losses.update(self.get_loss(loss, outputs[i], target_inst, indices, num_boxes))
@@ -281,7 +280,7 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
             if 'aux_outputs' in outputs[i]:
                 for i, aux_outputs in enumerate(outputs[i]['aux_outputs']):
-                    indices = self.matcher(aux_outputs, target_inst)
+                    indices, target_indices = self.matcher(aux_outputs, target_inst)
                     for loss in self.losses:
                         if loss == 'masks':
                             # Intermediate masks losses are too costly to compute, we ignore them.
@@ -294,7 +293,7 @@ class SetCriterion(nn.Module):
                         l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                         losses.update(l_dict)
 
-        return losses
+        return losses, indices_ls, num_boxes_ls, num_boxes_ls
 
 
 class PostProcess(nn.Module):

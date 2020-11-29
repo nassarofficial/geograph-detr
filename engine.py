@@ -19,6 +19,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     device: torch.device, epoch: int, max_norm: float = 0):
     model.train()
     criterion.train()
+
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -30,7 +31,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         outputs = model(samples)
         # print("Out: len(outputs), len(targets_ls)", len(outputs), " - ", len(targets))
-        loss_dict = criterion(outputs, targets)
+        loss_dict, indices_ls, num_boxes_ls, num_boxes_ls = criterion(outputs, targets)
+
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
@@ -80,9 +82,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        print("Evaluator: ", targets)
         outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
+        loss_dict, indices_ls, num_boxes_ls, num_boxes_ls = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
