@@ -23,7 +23,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
         self.ids = [0]
-        self.ids_map = {0:[7,8,9,10]}
+        self.ids_map = {0:[7]}
 
     def __getitem__(self, idx):
         print("idx: ", idx)
@@ -33,6 +33,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             img_id = instances[i]
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             target = self.coco.loadAnns(ann_ids)
+            print(target)
             path = self.coco.loadImgs(img_id)[0]['file_name']
             img = Image.open(os.path.join(self.root, path)).convert('RGB')
 
@@ -74,10 +75,20 @@ class ConvertCocoPolysToMask(object):
         image_id = torch.tensor([image_id])
 
         anno = target["annotations"]
+        
 
         anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
 
         boxes = [obj["bbox"] for obj in anno]
+        det_keys = [obj["detection_key"] for obj in anno]
+
+        loc_gt = []
+        for obj in anno:
+            if obj["obj_lat"] != None and obj["obj_lng"] != None:
+                loc_gt.append([float(obj["obj_lat"]), float(obj["obj_lng"])])
+            else:
+                loc_gt.append([0, 0])
+
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         boxes[:, 2:] += boxes[:, :2]
@@ -102,6 +113,11 @@ class ConvertCocoPolysToMask(object):
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
         boxes = boxes[keep]
         classes = classes[keep]
+        det_keys = torch.as_tensor(det_keys)
+        loc_gt = torch.as_tensor(loc_gt)
+
+        det_keys = det_keys[keep]
+        loc_gt = loc_gt[keep]
         if self.return_masks:
             masks = masks[keep]
         if keypoints is not None:
@@ -109,6 +125,8 @@ class ConvertCocoPolysToMask(object):
 
         target = {}
         target["boxes"] = boxes
+        target["det_key"] = det_keys
+        target["loc_gt"] = loc_gt
         target["labels"] = classes
         if self.return_masks:
             target["masks"] = masks
@@ -124,7 +142,7 @@ class ConvertCocoPolysToMask(object):
 
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
         target["size"] = torch.as_tensor([int(h), int(w)])
-
+        print("coco: ", target)
         return image, target
 
 

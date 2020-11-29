@@ -42,6 +42,11 @@ def get_args_parser():
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
+    # * GNN
+    parser.add_argument('--gnn_type', default='gae_gcn', type=str)
+    parser.add_argument('--out_channels', default=16, type=int)
+    parser.add_argument('--num_features', default=2048, type=int)
+
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
                         help="Number of encoding layers in the transformer")
@@ -81,7 +86,7 @@ def get_args_parser():
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
-    # dataset parameters
+    # dataset parameters 
     parser.add_argument('--classes', default=2, type=int)
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)

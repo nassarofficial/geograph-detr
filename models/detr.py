@@ -5,6 +5,8 @@ DETR model and criterion classes.
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn import Linear
+from torch.nn import Sequential, Linear, ReLU, BatchNorm1d
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -19,6 +21,19 @@ from .transformer import build_transformer
 
 import subprocess
 import re
+
+
+import torch_geometric.transforms as T
+
+from torch_geometric.utils import train_test_split_edges, to_undirected
+from torch_geometric.utils import (negative_sampling, remove_self_loops,
+                                   add_self_loops)
+from torch_geometric.data import DataLoader, Dataset
+from torch_cluster import knn_graph
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+from torch_geometric.nn import GCNConv, GAE, VGAE, ARGA, ARGVA, EdgeConv
+from torch_geometric.nn.inits import reset
+
 command = 'nvidia-smi'
 
 class DETR(nn.Module):
@@ -106,7 +121,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, gnn_model):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -121,6 +136,8 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
+        self.gnn_model = gnn_model
+
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
@@ -244,6 +261,7 @@ class SetCriterion(nn.Module):
         for i in range(len(outputs)):
             outputs_without_aux = {k: v for k, v in outputs[i].items() if k != 'aux_outputs'}
             target_inst = [targets[i]]
+            print("target_inst: ",target_inst)
             # Retrieve the matching between the outputs of the last layer and the targets
             indices = self.matcher(outputs_without_aux, target_inst)
 
@@ -326,6 +344,74 @@ class MLP(nn.Module):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+class GCN(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GCN, self).__init__()
+        
+        self.conv1 = GCNConv(in_channels + 3, in_channels+ 3 * 2)
+        self.conv2 = GCNConv(in_channels+ 3 * 2, in_channels+ 3 * 2)
+        self.conv3 = GCNConv(in_channels+ 3 * 2, in_channels+ 3 * 4)
+        self.conv4 = GCNConv(in_channels+ 3 * 4, in_channels+ 3 * 4)
+        
+        self.lin1 = Linear(in_channels+ 3 * 4, in_channels+ 3 * 2)
+        self.lin2 = Linear(in_channels+ 3 * 2, in_channels+ 3)
+        self.lin3 = Linear(in_channels+ 3, out_channels+ 3)
+
+    def forward(self, data):
+        x, edge_index, geos = data.x, data.train_pos_edge_index, data.geos
+        x = torch.cat((x, geos.float()),1)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+                
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        
+        x = self.conv3(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        
+        x = self.conv4(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+
+        x = self.lin1(x)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+
+        x = self.lin2(x)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)        
+
+        x = self.lin3(x)
+        
+        return x 
+
+
+class GCNEncoder(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GCNEncoder, self).__init__()
+        self.conv1 = GCNConv(in_channels, 1024, cached=True)
+        self.conv2 = GCNConv(1024, 1024, cached=True)
+        self.conv3 = GCNConv(1024, 512, cached=True)
+        self.conv4 = GCNConv(512, 512, cached=True)
+        self.conv5 = GCNConv(512, 256, cached=True)
+        self.conv6 = GCNConv(256, out_channels, cached=True)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv2(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv3(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv4(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv5(x, edge_index).relu()
+        return self.conv6(x, edge_index)
+
+
 
 def build(args):
     # the `num_classes` naming here is somewhat misleading.
@@ -337,10 +423,7 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     num_classes = args.classes
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
+
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -354,8 +437,13 @@ def build(args):
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
     )
+
     matcher = build_matcher(args)
+
+    gnn_model = GAE(GCN(args.num_features, args.out_channels))
+
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+
     weight_dict['loss_giou'] = args.giou_loss_coef
 
     # TODO this is a hack
@@ -368,7 +456,7 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
 
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
+                             eos_coef=args.eos_coef, losses=losses, gnn_model=gnn_model)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
 

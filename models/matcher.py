@@ -62,10 +62,17 @@ class HungarianMatcher(nn.Module):
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
         # print("Out: out_prob", out_prob.shape)
         # print("Out: out_bbox", out_bbox.shape)
-
+        print("matcher: ", targets)
+        exit()
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
+        tgt_det_key = torch.cat([v["det_key"] for v in targets])
+        # print("----------------------------------------")
+        # print(targets)
+        # print("Out: tgt_bbox", tgt_bbox)
+        # print("Out: tgt_ids", tgt_ids)
+        # print("Out: tgt_det_key", tgt_det_key)
 
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
@@ -83,6 +90,9 @@ class HungarianMatcher(nn.Module):
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [len(v["boxes"]) for v in targets]
+        print("Out: C", C)
+        print("Out: sizes", sizes)
+        exit()
         # print("Out: sizes", len(sizes))
         # print("Out: -------------------------")
 
