@@ -45,7 +45,7 @@ def get_args_parser():
     # * GNN
     parser.add_argument('--gnn_type', default='gae_gcn', type=str)
     parser.add_argument('--out_channels', default=16, type=int)
-    parser.add_argument('--num_features', default=2048, type=int)
+    parser.add_argument('--num_features', default=256, type=int)
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -128,13 +128,18 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    model, gnn_model, criterion, postprocessors = build_model(args)
     model.to(device)
-
+    gnn_model.to(device)
     model_without_ddp = model
+    gnn_model_without_ddp = gnn_model
+
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+        gnn_model = torch.nn.parallel.DistributedDataParallel(gnn_model, device_ids=[args.gpu])
+        gnn_model_without_ddp = gnn_model.module
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
@@ -201,7 +206,7 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+            model, criterion, data_loader_train, optimizer, device, gnn_model, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:
@@ -219,7 +224,7 @@ def main(args):
                 }, checkpoint_path)
 
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            model, criterion, postprocessors, data_loader_val, base_ds, device, gnn_model, args.output_dir
         )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},

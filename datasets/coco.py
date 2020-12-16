@@ -23,7 +23,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
         self.ids = [0]
-        self.ids_map = {0:[7]}
+        self.ids_map = {0:[7, 8, 9, 10]}
 
     def __getitem__(self, idx):
         print("idx: ", idx)
