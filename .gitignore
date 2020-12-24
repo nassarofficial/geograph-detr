@@ -1,5 +1,7 @@
 .nfs*
+*.txt
 *.ipynb
+*.pickle
 *.pyc
 .dumbo.json
 .DS_Store

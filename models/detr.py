@@ -5,6 +5,10 @@ DETR model and criterion classes.
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn import Linear
+from torch.nn import Sequential, Linear, ReLU, BatchNorm1d
+from torch.nn import Sequential as Seq, Linear as Lin, ReLU, BatchNorm1d
+
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -19,7 +23,21 @@ from .transformer import build_transformer
 
 import subprocess
 import re
+
+
+import torch_geometric.transforms as T
+
+from torch_geometric.utils import train_test_split_edges, to_undirected
+from torch_geometric.utils import (negative_sampling, remove_self_loops,
+                                   add_self_loops)
+from torch_geometric.data import DataLoader, Dataset
+from torch_cluster import knn_graph
+from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+from torch_geometric.nn import MessagePassing, GCNConv
+from torch_geometric.nn.inits import reset
+
 command = 'nvidia-smi'
+
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -106,7 +124,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, gnn_model):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -121,6 +139,8 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
+        self.gnn_model = gnn_model
+
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
@@ -240,12 +260,12 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         losses = {}
-        indices_ls, num_boxes_ls = [], []
+        indices_ls, num_boxes_ls, target_indices_ls = [], [], [] 
         for i in range(len(outputs)):
             outputs_without_aux = {k: v for k, v in outputs[i].items() if k != 'aux_outputs'}
             target_inst = [targets[i]]
             # Retrieve the matching between the outputs of the last layer and the targets
-            indices = self.matcher(outputs_without_aux, target_inst)
+            indices, target_indices = self.matcher(outputs_without_aux, target_inst)
 
             # Compute the average number of target boxes accross all nodes, for normalization purposes
             num_boxes = sum(len(t["labels"]) for t in target_inst)
@@ -255,7 +275,7 @@ class SetCriterion(nn.Module):
             num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
             indices_ls.append(indices) 
             num_boxes_ls.append(num_boxes)
-
+            target_indices_ls.append(target_indices)
         # Compute all the requested losses
             for loss in self.losses:
                 losses.update(self.get_loss(loss, outputs[i], target_inst, indices, num_boxes))
@@ -263,7 +283,7 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
             if 'aux_outputs' in outputs[i]:
                 for i, aux_outputs in enumerate(outputs[i]['aux_outputs']):
-                    indices = self.matcher(aux_outputs, target_inst)
+                    indices, target_indices = self.matcher(aux_outputs, target_inst)
                     for loss in self.losses:
                         if loss == 'masks':
                             # Intermediate masks losses are too costly to compute, we ignore them.
@@ -276,7 +296,7 @@ class SetCriterion(nn.Module):
                         l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                         losses.update(l_dict)
 
-        return losses
+        return losses, indices_ls, num_boxes_ls, target_indices_ls
 
 
 class PostProcess(nn.Module):
@@ -290,7 +310,6 @@ class PostProcess(nn.Module):
                           For evaluation, this must be the original image size (before any data augmentation)
                           For visualization, this should be the image size after data augment, but before padding
         """
-        print(target_sizes)
         results = []
         for i in range(len(outputs)):
             out_logits, out_bbox = outputs[i]['pred_logits'], outputs[i]['pred_boxes']
@@ -326,6 +345,86 @@ class MLP(nn.Module):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+class EdgePooling(torch.nn.Module):
+
+    def __init__(self, in_channels, dropout=0.3,
+                 add_to_edge_score=0.3):
+        super(EdgePooling, self).__init__()
+        self.in_channels = in_channels
+        self.add_to_edge_score = add_to_edge_score
+        self.dropout = dropout
+
+        self.lin = torch.nn.Linear(2 * in_channels, 1)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+
+    @staticmethod
+    def compute_edge_score_softmax(raw_edge_score, edge_index, num_nodes):
+        return softmax(raw_edge_score, edge_index[1], num_nodes=num_nodes)
+
+    @staticmethod
+    def compute_edge_score_tanh(raw_edge_score, edge_index, num_nodes):
+        return torch.tanh(raw_edge_score)
+
+    @staticmethod
+    def compute_edge_score_sigmoid(raw_edge_score, edge_index, num_nodes):
+        return torch.sigmoid(raw_edge_score)
+
+    def forward(self, x, edge_index):
+        e = torch.cat([x[edge_index[0]], x[edge_index[1]]], dim=-1)
+        e = self.lin(e).view(-1)
+        e = F.dropout(e, p=self.dropout, training=self.training)
+        e = self.compute_edge_score_sigmoid(e, edge_index, x.size(0))
+        e = e + self.add_to_edge_score
+
+        return x, edge_index, e
+
+class EdgeConv(MessagePassing):
+    def __init__(self, in_channels, out_channels):
+        super(EdgeConv, self).__init__(aggr='mean') #  "Max" aggregation.
+        self.mlp = Seq(Linear(2 * in_channels, out_channels),
+                       ReLU(),
+                       Linear(out_channels, out_channels))
+
+    def forward(self, x, edge_index):
+        # x has shape [N, in_channels]
+        # edge_index has shape [2, E]
+
+        return self.propagate(edge_index, x=x)
+
+    def message(self, x_i, x_j):
+        # x_i has shape [E, in_channels]
+        # x_j has shape [E, in_channels]
+
+        tmp = torch.cat([x_i, x_j - x_i], dim=1)  # tmp has shape [E, 2 * in_channels]
+
+        return self.mlp(tmp)
+
+class GNNNet(torch.nn.Module):
+    def __init__(self, out_channels):
+        super().__init__()
+
+        self.conv1 = EdgeConv(256, 64)
+        self.bn1 = BatchNorm1d(64)
+        self.conv6 = EdgeConv(64, out_channels)
+        self.pool = EdgePooling(out_channels, add_to_edge_score=0)
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+        self.lin1.reset_parameters()
+            
+    def forward(self, x, edge_index):
+        x = F.relu(self.conv1(x, edge_index))
+        x = F.dropout(x, training = self.training)
+        x = self.bn1(x)
+        x = self.conv6(x, edge_index)
+        x, edge_index, edge_scores = self.pool(x, edge_index)
+        return edge_scores
+
 
 def build(args):
     # the `num_classes` naming here is somewhat misleading.
@@ -337,10 +436,7 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     num_classes = args.classes
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
+
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -354,8 +450,15 @@ def build(args):
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
     )
+
     matcher = build_matcher(args)
+
+    gnn_model = GNNNet(16)
+
+    # gnn_model = GAE(GCN(256, 16))
+
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+
     weight_dict['loss_giou'] = args.giou_loss_coef
 
     # TODO this is a hack
@@ -368,8 +471,8 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
 
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
+                             eos_coef=args.eos_coef, losses=losses, gnn_model=gnn_model)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
 
-    return model, criterion, postprocessors
+    return model, gnn_model, criterion, postprocessors

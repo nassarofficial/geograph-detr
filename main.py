@@ -42,10 +42,15 @@ def get_args_parser():
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
+    # * GNN
+    parser.add_argument('--gnn_type', default='gae_gcn', type=str)
+    parser.add_argument('--out_channels', default=16, type=int)
+    parser.add_argument('--num_features', default=256, type=int)
+
     # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
+    parser.add_argument('--enc_layers', default=3, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
+    parser.add_argument('--dec_layers', default=3, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
@@ -81,13 +86,14 @@ def get_args_parser():
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
-    # dataset parameters
+    # dataset parameters 
     parser.add_argument('--classes', default=2, type=int)
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
     parser.add_argument('--instance', default='sv_sample_all')
+    parser.add_argument('--idx', default='sv')
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -123,13 +129,18 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    model, gnn_model, criterion, postprocessors = build_model(args)
     model.to(device)
-
+    gnn_model.to(device)
     model_without_ddp = model
+    gnn_model_without_ddp = gnn_model
+
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+        gnn_model = torch.nn.parallel.DistributedDataParallel(gnn_model, device_ids=[args.gpu])
+        gnn_model_without_ddp = gnn_model.module
+
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
@@ -146,7 +157,7 @@ def main(args):
 
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
-
+    print(dataset_val)
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
         sampler_val = DistributedSampler(dataset_val, shuffle=False)
@@ -185,7 +196,7 @@ def main(args):
 
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
+                                              data_loader_val, base_ds, device)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -196,7 +207,7 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+            model, criterion, data_loader_train, optimizer, device, gnn_model, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:
@@ -214,7 +225,7 @@ def main(args):
                 }, checkpoint_path)
 
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            model, criterion, postprocessors, data_loader_val, base_ds, device
         )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
