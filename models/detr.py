@@ -8,8 +8,11 @@ from torch import nn
 from torch.nn import Linear
 from torch.nn import Sequential, Linear, ReLU, BatchNorm1d
 <<<<<<< HEAD
+<<<<<<< HEAD
 from torch.nn import Sequential as Seq, Linear as Lin, ReLU, BatchNorm1d
 
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
@@ -37,7 +40,11 @@ from torch_geometric.data import DataLoader, Dataset
 from torch_cluster import knn_graph
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 <<<<<<< HEAD
+<<<<<<< HEAD
 from torch_geometric.nn import MessagePassing, GCNConv
+=======
+from torch_geometric.nn import GCNConv, GAE, VGAE, ARGA, ARGVA, EdgeConv
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
 from torch_geometric.nn import GCNConv, GAE, VGAE, ARGA, ARGVA, EdgeConv
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
@@ -353,6 +360,7 @@ class MLP(nn.Module):
         return x
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 class EdgePooling(torch.nn.Module):
 
     def __init__(self, in_channels, dropout=0.3,
@@ -433,6 +441,8 @@ class GNNNet(torch.nn.Module):
         x, edge_index, edge_scores = self.pool(x, edge_index)
         return edge_scores
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 class GCN(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(GCN, self).__init__()
@@ -570,6 +580,9 @@ class GNNNet(torch.nn.Module):
         prob_adj = z @ z.t()
         return (prob_adj > 0).nonzero(as_tuple=False).t()
 
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
 
@@ -601,7 +614,11 @@ def build(args):
     matcher = build_matcher(args)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     gnn_model = GNNNet(16)
+=======
+    gnn_model = GNNNet(256)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
     gnn_model = GNNNet(256)
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83

@@ -31,6 +31,7 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
     x_feat = []
     edge_index = [[],[]]
 <<<<<<< HEAD
+<<<<<<< HEAD
     # pos_edge_index = [[],[]]
     # neg_edge_index = [[],[]]
     num_features = 0
@@ -41,6 +42,8 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
     # # print(scores, labels)
     # threshed = torch.gt(scores, 0.5)
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     pos_edge_index = [[],[]]
     neg_edge_index = [[],[]]
     num_features = 0
@@ -50,6 +53,9 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
     scores, labels = prob[..., :-1].max(-1)
     # print(scores, labels)
     threshed = torch.gt(scores, 0.5)
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     # print(scores[threshed])
     # print(target_indices_ls)
@@ -80,6 +86,7 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
                     if target_indices_ls[x1][0][idx_i] == target_indices_ls[y1][0][idx_j] and target_indices_ls[x1][0][idx_i] != 99:
                         y_gt.extend([1, 1])
 <<<<<<< HEAD
+<<<<<<< HEAD
                         # utils.append_to_edge_index(pos_edge_index, i, j)
                     else:
                         y_gt.extend([0, 0])
@@ -88,6 +95,8 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
                     y_gt.extend([0, 0])
                     # utils.append_to_edge_index(neg_edge_index, i, j)
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
                         utils.append_to_edge_index(pos_edge_index, i, j)
                     else:
                         y_gt.extend([0, 0])
@@ -95,11 +104,15 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
                 else:
                     y_gt.extend([0, 0])
                     utils.append_to_edge_index(neg_edge_index, i, j)
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     # geos = torch.from_numpy(np.asarray(geos)).double()
     
     edge_index = torch.from_numpy(np.asarray(edge_index)).long()    
+<<<<<<< HEAD
 <<<<<<< HEAD
     # pos_edge_index = torch.from_numpy(np.asarray(pos_edge_index)).long()
     # neg_edge_index = torch.from_numpy(np.asarray(neg_edge_index)).long()
@@ -127,6 +140,8 @@ def compute_loss_bce(outputs, gt, device):
                                                     pos_weight= pos_weight)
     return loss
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     pos_edge_index = torch.from_numpy(np.asarray(pos_edge_index)).long()
     neg_edge_index = torch.from_numpy(np.asarray(neg_edge_index)).long()
     y_gt = torch.from_numpy(np.asarray(y_gt)).double()
@@ -137,6 +152,9 @@ def compute_loss_bce(outputs, gt, device):
                 x=x_feat, 
                 y=y_gt)
     return data
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
 
@@ -146,7 +164,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     model.train()
     criterion.train()
 <<<<<<< HEAD
+<<<<<<< HEAD
     model_gnn.train()
+=======
+    model_gnn.train().to(device)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
     model_gnn.train().to(device)
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
@@ -164,6 +186,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
 <<<<<<< HEAD
+<<<<<<< HEAD
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
         graph_sample = graph_sample.to(device)
 
@@ -171,6 +194,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         loss_bce = compute_loss_bce(gnn_out, graph_sample.y, device)
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
         graph_sample = graph_sample.to(device)
@@ -184,6 +209,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         link_labels = graph_sample.y.to(device)
         graph_loss = F.binary_cross_entropy_with_logits(link_logits, link_labels)
 
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
         weight_dict = criterion.weight_dict
@@ -205,12 +233,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         optimizer.zero_grad()
 <<<<<<< HEAD
+<<<<<<< HEAD
 
         loss_value = loss_bce + loss_value
         
 
         losses.backward(retain_graph=True)
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         graph_loss.backward(retain_graph=True)
         losses.backward()
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
@@ -220,7 +251,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
 <<<<<<< HEAD
+<<<<<<< HEAD
         metric_logger.update(graph_loss=loss_bce)
+=======
+        metric_logger.update(graph_loss=graph_loss)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
         metric_logger.update(graph_loss=graph_loss)
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
@@ -234,7 +269,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 @torch.no_grad()
 <<<<<<< HEAD
+<<<<<<< HEAD
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
+=======
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, model_gnn, output_dir):
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 =======
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, model_gnn, output_dir):
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
@@ -258,12 +297,15 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, mod
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
 <<<<<<< HEAD
+<<<<<<< HEAD
         graph_sample = graph_sample.to(device)
 
         grapher.append(graph_sample)
 
         counter += 1
 =======
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         # print("graph_sample: ", graph_sample)
         # graph_sample_splitted = utils.train_test_split_edges(graph_sample)
         # print("graph_sample_splitted: ", graph_sample_splitted)
@@ -289,6 +331,9 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, mod
         f1 = f1_score(link_labels.cpu(), np.around(link_probs.cpu()), average='micro')
         print("Out: ROC: ------- ", roc, "----- f1: ", f1)
 
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         weight_dict = criterion.weight_dict
         # reduce losses over all GPUs for logging purposes

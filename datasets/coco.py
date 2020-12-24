@@ -29,6 +29,9 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 =======
         self.ids = [0]
         self.ids_map = {0:[7, 8, 9, 10]}
+<<<<<<< HEAD
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
+=======
 >>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     def __getitem__(self, idx):
