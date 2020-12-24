@@ -30,6 +30,7 @@ def get_link_labels(pos_edge_index, neg_edge_index):
 def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
     x_feat = []
     edge_index = [[],[]]
+<<<<<<< HEAD
     # pos_edge_index = [[],[]]
     # neg_edge_index = [[],[]]
     num_features = 0
@@ -39,6 +40,17 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
     # scores, labels = prob[..., :-1].max(-1)
     # # print(scores, labels)
     # threshed = torch.gt(scores, 0.5)
+=======
+    pos_edge_index = [[],[]]
+    neg_edge_index = [[],[]]
+    num_features = 0
+    y_gt = []
+
+    prob = F.softmax(features[0]['pred_logits'], -1)
+    scores, labels = prob[..., :-1].max(-1)
+    # print(scores, labels)
+    threshed = torch.gt(scores, 0.5)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     # print(scores[threshed])
     # print(target_indices_ls)
     for i in range(len(features)):
@@ -67,6 +79,7 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
                     idx_j = indices_ls[y1][0][0].tolist().index(j)
                     if target_indices_ls[x1][0][idx_i] == target_indices_ls[y1][0][idx_j] and target_indices_ls[x1][0][idx_i] != 99:
                         y_gt.extend([1, 1])
+<<<<<<< HEAD
                         # utils.append_to_edge_index(pos_edge_index, i, j)
                     else:
                         y_gt.extend([0, 0])
@@ -74,10 +87,20 @@ def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
                 else:
                     y_gt.extend([0, 0])
                     # utils.append_to_edge_index(neg_edge_index, i, j)
+=======
+                        utils.append_to_edge_index(pos_edge_index, i, j)
+                    else:
+                        y_gt.extend([0, 0])
+                        utils.append_to_edge_index(neg_edge_index, i, j)
+                else:
+                    y_gt.extend([0, 0])
+                    utils.append_to_edge_index(neg_edge_index, i, j)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     # geos = torch.from_numpy(np.asarray(geos)).double()
     
     edge_index = torch.from_numpy(np.asarray(edge_index)).long()    
+<<<<<<< HEAD
     # pos_edge_index = torch.from_numpy(np.asarray(pos_edge_index)).long()
     # neg_edge_index = torch.from_numpy(np.asarray(neg_edge_index)).long()
     y_gt = torch.from_numpy(np.asarray(y_gt)).double()
@@ -103,6 +126,18 @@ def compute_loss_bce(outputs, gt, device):
                                                     gt.view(-1),
                                                     pos_weight= pos_weight)
     return loss
+=======
+    pos_edge_index = torch.from_numpy(np.asarray(pos_edge_index)).long()
+    neg_edge_index = torch.from_numpy(np.asarray(neg_edge_index)).long()
+    y_gt = torch.from_numpy(np.asarray(y_gt)).double()
+
+    data = Data(edge_index=edge_index, 
+                train_pos_edge_index=pos_edge_index,
+                train_neg_edge_index=neg_edge_index,
+                x=x_feat, 
+                y=y_gt)
+    return data
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
@@ -110,7 +145,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     device: torch.device, model_gnn: torch.nn.Module, epoch: int, max_norm: float = 0):
     model.train()
     criterion.train()
+<<<<<<< HEAD
     model_gnn.train()
+=======
+    model_gnn.train().to(device)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -124,12 +163,28 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
+<<<<<<< HEAD
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
         graph_sample = graph_sample.to(device)
 
         gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index).to(device)
 
         loss_bce = compute_loss_bce(gnn_out, graph_sample.y, device)
+=======
+
+        graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
+        graph_sample = graph_sample.to(device)
+
+        
+        with open('graph_sample.pickle', 'wb') as handle:
+            pickle.dump(graph_sample, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        exit()
+        z = model_gnn.encode(graph_sample.x, graph_sample.train_pos_edge_index)
+        link_logits = model_gnn.decode(z, graph_sample.edge_index).to(device)
+        link_labels = graph_sample.y.to(device)
+        graph_loss = F.binary_cross_entropy_with_logits(link_logits, link_labels)
+
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -149,17 +204,26 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             sys.exit(1)
 
         optimizer.zero_grad()
+<<<<<<< HEAD
 
         loss_value = loss_bce + loss_value
         
 
         losses.backward(retain_graph=True)
+=======
+        graph_loss.backward(retain_graph=True)
+        losses.backward()
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         optimizer.step()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
+<<<<<<< HEAD
         metric_logger.update(graph_loss=loss_bce)
+=======
+        metric_logger.update(graph_loss=graph_loss)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
     # gather the stats from all processes
@@ -169,7 +233,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
+<<<<<<< HEAD
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
+=======
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, model_gnn, output_dir):
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     model.eval()
     criterion.eval()
 
@@ -189,11 +257,39 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
+<<<<<<< HEAD
         graph_sample = graph_sample.to(device)
 
         grapher.append(graph_sample)
 
         counter += 1
+=======
+        # print("graph_sample: ", graph_sample)
+        # graph_sample_splitted = utils.train_test_split_edges(graph_sample)
+        # print("graph_sample_splitted: ", graph_sample_splitted)
+        graph_sample = graph_sample.to(device)
+        # x = data_splited.x
+        # print(train_pos_edge_index.shape)
+        neg_edge_index = negative_sampling(
+            edge_index=graph_sample.train_pos_edge_index, num_nodes=graph_sample.num_nodes,
+            num_neg_samples=graph_sample.train_pos_edge_index.size(1))
+
+        z = model_gnn.encode(graph_sample.x, graph_sample.edge_index)
+        link_logits = model_gnn.decode(z, graph_sample.edge_index).to(device)
+        link_labels = graph_sample.y.to(device)
+        print(get_link_labels(graph_sample.train_pos_edge_index, neg_edge_index).to(device).shape)
+
+        graph_loss = F.binary_cross_entropy_with_logits(link_logits, link_labels)
+        link_probs = link_logits.sigmoid()
+
+        print("----------------")
+        print(link_labels)
+        print(link_probs)
+        roc = roc_auc_score(link_labels.cpu(), np.around(link_probs.cpu()))
+        f1 = f1_score(link_labels.cpu(), np.around(link_probs.cpu()), average='micro')
+        print("Out: ROC: ------- ", roc, "----- f1: ", f1)
+
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         weight_dict = criterion.weight_dict
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)

@@ -130,14 +130,17 @@ def main(args):
     random.seed(seed)
 
     model, gnn_model, criterion, postprocessors = build_model(args)
+
     model.to(device)
     gnn_model.to(device)
+
     model_without_ddp = model
     gnn_model_without_ddp = gnn_model
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+        
         gnn_model = torch.nn.parallel.DistributedDataParallel(gnn_model, device_ids=[args.gpu])
         gnn_model_without_ddp = gnn_model.module
 

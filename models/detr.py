@@ -7,8 +7,11 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn import Linear
 from torch.nn import Sequential, Linear, ReLU, BatchNorm1d
+<<<<<<< HEAD
 from torch.nn import Sequential as Seq, Linear as Lin, ReLU, BatchNorm1d
 
+=======
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -33,7 +36,11 @@ from torch_geometric.utils import (negative_sampling, remove_self_loops,
 from torch_geometric.data import DataLoader, Dataset
 from torch_cluster import knn_graph
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+<<<<<<< HEAD
 from torch_geometric.nn import MessagePassing, GCNConv
+=======
+from torch_geometric.nn import GCNConv, GAE, VGAE, ARGA, ARGVA, EdgeConv
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 from torch_geometric.nn.inits import reset
 
 command = 'nvidia-smi'
@@ -345,6 +352,7 @@ class MLP(nn.Module):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+<<<<<<< HEAD
 class EdgePooling(torch.nn.Module):
 
     def __init__(self, in_channels, dropout=0.3,
@@ -424,6 +432,145 @@ class GNNNet(torch.nn.Module):
         x = self.conv6(x, edge_index)
         x, edge_index, edge_scores = self.pool(x, edge_index)
         return edge_scores
+=======
+class GCN(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GCN, self).__init__()
+        
+        # self.conv1 = GCNConv(in_channels + 3, in_channels+ 3 * 2)
+        # self.conv2 = GCNConv(in_channels+ 3 * 2, in_channels+ 3 * 2)
+        # self.conv3 = GCNConv(in_channels+ 3 * 2, in_channels+ 3 * 4)
+        # self.conv4 = GCNConv(in_channels+ 3 * 4, in_channels+ 3 * 4)
+        
+        # self.lin1 = Linear(in_channels+ 3 * 4, in_channels+ 3 * 2)
+        # self.lin2 = Linear(in_channels+ 3 * 2, in_channels+ 3)
+        # self.lin3 = Linear(in_channels+ 3, out_channels+ 3)
+        self.conv1 = GCNConv(in_channels, in_channels * 2)
+        self.conv2 = GCNConv(in_channels * 2, in_channels * 2)
+        self.conv3 = GCNConv(in_channels * 2, in_channels * 4)
+        self.conv4 = GCNConv(in_channels * 4, in_channels * 4)
+        
+        self.lin1 = Linear(in_channels * 4, in_channels * 2)
+        self.lin2 = Linear(in_channels * 2, in_channels)
+        self.lin3 = Linear(in_channels, out_channels)
+
+    def forward(self, data):
+        # x, edge_index, geos = data.x, data.train_pos_edge_index, data.geos
+        x, edge_index = data.x, data.train_pos_edge_index
+        # x = torch.cat((x, geos.float()),1)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+                
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        
+        x = self.conv3(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+        
+        x = self.conv4(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+
+        x = self.lin1(x)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)
+
+        x = self.lin2(x)
+        x = F.relu(x)
+        x = F.dropout(x, training=self.training)        
+
+        x = self.lin3(x)
+        
+        return x 
+
+
+class GCNEncoder(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(GCNEncoder, self).__init__()
+        self.conv1 = GCNConv(in_channels, 128, cached=True)
+        self.conv2 = GCNConv(128, 128, cached=True)
+        self.conv3 = GCNConv(128, 64, cached=True)
+        self.conv4 = GCNConv(64, 64, cached=True)
+        self.conv5 = GCNConv(64, 32, cached=True)
+        self.conv6 = GCNConv(32, out_channels, cached=True)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv2(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv3(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv4(x, edge_index).relu()
+        x = F.dropout(x, training=self.training)
+        x = self.conv5(x, edge_index).relu()
+        return self.conv6(x, edge_index)
+
+# class GNNNet(torch.nn.Module):
+#     def __init__(self, in_channels):
+#         super(GNNNet, self).__init__()
+#         self.conv1 = GCNConv(in_channels, 64)
+#         self.conv2 = GCNConv(64, 16)
+
+#     def encode(self, data):
+#         x = self.conv1(data.x, data.train_pos_edge_index)
+#         x = x.relu()
+#         return self.conv2(x, data.train_pos_edge_index)
+
+#     def decode(self, z, train_pos_edge_index, train_neg_edge_index):
+#         edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=-1)
+#         logits = (z[edge_index[0]] * z[edge_index[1]]).sum(dim=-1)
+#         return logits
+
+#     def decode_all(self, z):
+#         prob_adj = z @ z.t()
+#         return (prob_adj > 0).nonzero(as_tuple=False).t()
+
+class GNNNet(torch.nn.Module):
+    def __init__(self, in_channels):
+        super(GNNNet, self).__init__()
+        # self.conv1 = GCNConv(in_channels, 128, cached=True)
+        # self.conv2 = GCNConv(128, 128, cached=True)
+        # self.conv3 = GCNConv(128, 64, cached=True)
+        # self.conv4 = GCNConv(64, 64, cached=True)
+        # self.conv5 = GCNConv(64, 32, cached=True)
+        # self.conv6 = GCNConv(32, 16, cached=True)
+        self.conv1 = GCNConv(in_channels, 64)
+        self.conv2 = GCNConv(64, 16)
+
+    def encode(self, x, edge_index):
+        # x = self.conv1(x, edge_index).relu()
+        # x = F.dropout(x, training=self.training)
+        # x = self.conv2(x, edge_index).relu()
+        # x = F.dropout(x, training=self.training)
+        # x = self.conv3(x, edge_index).relu()
+        # x = F.dropout(x, training=self.training)
+        # x = self.conv4(x, edge_index).relu()
+        # x = F.dropout(x, training=self.training)
+        # x = self.conv5(x, edge_index).relu()
+        # return self.conv6(x, edge_index)
+        x = self.conv1(x, edge_index)
+        x = x.relu()
+        return self.conv2(x, edge_index)
+
+
+    # def decode(self, z, train_pos_edge_index, train_neg_edge_index):
+    #     edge_index = torch.cat([train_pos_edge_index, train_neg_edge_index], dim=-1)
+    #     logits = (z[edge_index[0]] * z[edge_index[1]]).sum(dim=-1)
+    #     return logits
+
+    def decode(self, z, edge_index):
+        logits = (z[edge_index[0]] * z[edge_index[1]]).sum(dim=-1)
+        return logits
+
+    def decode_all(self, z):
+        prob_adj = z @ z.t()
+        return (prob_adj > 0).nonzero(as_tuple=False).t()
+
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
 
 def build(args):
@@ -453,7 +600,11 @@ def build(args):
 
     matcher = build_matcher(args)
 
+<<<<<<< HEAD
     gnn_model = GNNNet(16)
+=======
+    gnn_model = GNNNet(256)
+>>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     # gnn_model = GAE(GCN(256, 16))
 
