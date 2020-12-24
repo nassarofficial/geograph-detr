@@ -22,17 +22,9 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         super(CocoDetection, self).__init__(img_folder, ann_file, idx_file)
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
-<<<<<<< HEAD
         self.idx_file = pickle.load(open(idx_file, "rb"))
         self.ids = self.idx_file.keys()
         self.ids_map = self.idx_file
-=======
-        self.ids = [0]
-        self.ids_map = {0:[7, 8, 9, 10]}
-<<<<<<< HEAD
->>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
-=======
->>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
 
     def __getitem__(self, idx):
         img_batch, target_batch = [], []

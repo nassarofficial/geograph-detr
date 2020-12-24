@@ -130,25 +130,17 @@ def main(args):
     random.seed(seed)
 
     model, gnn_model, criterion, postprocessors = build_model(args)
-<<<<<<< HEAD
 
     model.to(device)
     gnn_model.to(device)
 
-=======
-    model.to(device)
-    gnn_model.to(device)
->>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
     model_without_ddp = model
     gnn_model_without_ddp = gnn_model
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
-<<<<<<< HEAD
         
-=======
->>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         gnn_model = torch.nn.parallel.DistributedDataParallel(gnn_model, device_ids=[args.gpu])
         gnn_model_without_ddp = gnn_model.module
 
@@ -236,11 +228,7 @@ def main(args):
                 }, checkpoint_path)
 
         test_stats, coco_evaluator = evaluate(
-<<<<<<< HEAD
             model, criterion, postprocessors, data_loader_val, base_ds, device
-=======
-            model, criterion, postprocessors, data_loader_val, base_ds, device, gnn_model, args.output_dir
->>>>>>> 087dfa61dce65b662e1ea35cb397a1dd996d2e83
         )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
