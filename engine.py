@@ -27,7 +27,7 @@ def get_link_labels(pos_edge_index, neg_edge_index):
     link_labels[:pos_edge_index.size(1)] = 1.
     return link_labels
 
-def graph_data_generator(features, indices_ls, num_boxes_ls, target_indices_ls):
+def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target_indices_ls):
     x_feat = []
     edge_index = [[],[]]
     # pos_edge_index = [[],[]]
@@ -119,12 +119,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
-    for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+    for samples, geo_samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
+        geo_samples = geo_samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
-        graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
+        graph_sample = graph_data_generator(outputs, geo_samples, indices_ls, num_boxes_ls, target_indices_ls)
         graph_sample = graph_sample.to(device)
 
         gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index).to(device)
@@ -191,6 +192,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
         graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
         graph_sample = graph_sample.to(device)
 
+        # gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index).to(device)
+
         grapher.append(graph_sample)
 
         counter += 1
@@ -211,6 +214,23 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
+
+        thresh_dets = coco_evaluator.eval_imgs["bbox"][0][0][0][0]
+        print(thresh_dets)
+        # detections_identified = []
+        # detections_key = {}
+        # for det in thresh_dets:
+        #     detections_identified.append(thresh_dets["dtkIds"])
+        #     detections_key[thresh_dets["image_id"]] = thresh_dets["dtkIds"]
+
+
+        # for i in range(len(thresh_dets)):
+        #     for j in range(len(thresh_dets)):
+        #         if i != j:
+        #             det_keys1, det_keys2 = list(filter(lambda a: a != 99, thresh_dets[i]['detKey'])), list(filter(lambda a: a != 99, thresh_dets[j]['detKey']))
+        #             print(thresh_dets[i]["dtkIds"])
+        #             print(thresh_dets["dtkIds"])
+        # exit()
 
     with open('graph_all.pickle', 'wb') as handle:
         pickle.dump(grapher, handle, protocol=pickle.HIGHEST_PROTOCOL)

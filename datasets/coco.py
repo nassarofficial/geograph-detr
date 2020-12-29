@@ -15,7 +15,9 @@ import os
 import os.path
 import pickle
 import datasets.transforms as T
+import numpy as np
 
+torch.set_printoptions(precision=10)
 
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, idx_file, transforms, return_masks):
@@ -27,13 +29,17 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         self.ids_map = self.idx_file
 
     def __getitem__(self, idx):
-        img_batch, target_batch = [], []
+        img_batch, geo_batch, target_batch = [], [], []
         instances = self.ids_map[idx]
         for i in range(len(instances)):
             img_id = instances[i]
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             target = self.coco.loadAnns(ann_ids)
             path = self.coco.loadImgs(img_id)[0]['file_name']
+            geo_lat = self.coco.loadImgs(img_id)[0]['pano_lat']
+            geo_lng = self.coco.loadImgs(img_id)[0]['pano_lng']
+            geo_deg = self.coco.loadImgs(img_id)[0]['projection']['pano_yaw_deg']
+            geo = np.array([geo_lat, geo_lng, geo_deg])
             img = Image.open(os.path.join(self.root, path)).convert('RGB')
 
             image_id = img_id
@@ -42,8 +48,9 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             if self._transforms is not None:
                 img, target = self._transforms(img, target)
             img_batch.append(img)
+            geo_batch.append(geo)
             target_batch.append(target)
-        return img_batch, target_batch
+        return img_batch, geo_batch, target_batch
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
@@ -84,9 +91,9 @@ class ConvertCocoPolysToMask(object):
         loc_gt = []
         for obj in anno:
             if obj["obj_lat"] != None and obj["obj_lng"] != None:
-                loc_gt.append([float(obj["obj_lat"]), float(obj["obj_lng"])])
+                loc_gt.append([np.float64(obj["obj_lat"]), np.float64(obj["obj_lng"])])
             else:
-                loc_gt.append([0, 0])
+                loc_gt.append([np.float64(0), np.float64(0)])
 
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
@@ -113,7 +120,7 @@ class ConvertCocoPolysToMask(object):
         boxes = boxes[keep]
         classes = classes[keep]
         det_keys = torch.as_tensor(det_keys)
-        loc_gt = torch.as_tensor(loc_gt)
+        loc_gt = torch.as_tensor(loc_gt, dtype=torch.double)
 
         det_keys = det_keys[keep]
         loc_gt = loc_gt[keep]
