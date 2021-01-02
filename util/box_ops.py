@@ -4,7 +4,59 @@ Utilities for bounding box manipulation and GIoU.
 """
 import torch
 from torchvision.ops.boxes import box_area
+import math
+import numpy as np
+def get_link_labels(pos_edge_index, neg_edge_index):
+    E = pos_edge_index.size(1) + neg_edge_index.size(1)
+    link_labels = torch.zeros(E, dtype=torch.float)
+    link_labels[:pos_edge_index.size(1)] = 1.
+    return link_labels
 
+def get_cartesian(lat,lon):
+    lat, lon = np.deg2rad(lat), np.deg2rad(lon)
+    R = 6371 # radius of the earth
+    x = R * np.cos(lat) * np.cos(lon)
+    y = R * np.cos(lat) * np.sin(lon)
+    z = R *np.sin(lat)
+    return x,y,z
+
+def get_lat_lng(x,y,z):
+    R = 6371
+    lat = np.degrees(np.arcsin(z/R))
+    lon = np.degrees(np.arctan2(y, x))
+    return lat, lon
+
+def streetview_pixel_to_world_coordinates(x, y, yaw, image_width, image_height, o_lat, o_long, height=0):
+    camera_height = 3  # ballpark estimate of the number of meters that camera is off the ground
+    pitch = 0
+    yaw = yaw*math.pi/180
+    look_at_angle = x*(2*math.pi)/image_width
+    tilt_angle = (image_height/2-y)*math.pi/image_height+pitch
+    z = (height-camera_height) / math.tan(min(-1e-2, tilt_angle))
+    dx = math.sin(look_at_angle-math.pi+yaw)*z/6371000
+    dy = math.cos(look_at_angle-math.pi+yaw)*z/6371000
+    lat = o_lat + math.degrees(math.asin(dy))
+    lng = o_long + math.degrees(math.asin(dx/math.cos(math.radians(o_lat))))
+    return lat, lng
+
+def world_coordinates_to_streetview_pixel(o_lat, o_lng, c_lat, c_lng, height=0):
+    camera_height = 3
+    pitch = 0
+
+    dx, dy = math.cos(math.radians(c_lat))*math.sin(math.radians(o_lng-c_lng)), math.sin(math.radians(o_lat-c_lat))
+    look_at_angle = math.pi + math.atan2(dx, dy) - yaw
+
+    while look_at_angle > 2*math.pi: 
+        look_at_angle = look_at_angle-2*math.pi
+
+    while look_at_angle < 0:
+        look_at_angle = look_at_angle+2*math.pi
+
+    z = math.sqrt(dx*dx+dy*dy)*6371000
+  
+    x = (image_width*look_at_angle)/(2*math.pi)
+    y = image_height/2 - image_height*(math.atan2(height-camera_height, z)-pitch)/(math.pi) 
+    return x, y 
 
 def box_cxcywh_to_xyxy(x):
     x_c, y_c, w, h = x.unbind(-1)

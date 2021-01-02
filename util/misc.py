@@ -22,13 +22,40 @@ from torch_geometric.utils import (negative_sampling, remove_self_loops,
                                    add_self_loops)
 
 from torch_geometric.nn.inits import reset
-
+import math
 
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
 if float(torchvision.__version__[:3]) < 0.7:
     from torchvision.ops import _new_empty_tensor
     from torchvision.ops.misc import _output_size
+
+
+def world_coordinates_to_tile_coordinates(lat, lng, zoom=20, TILE_SIZE=256):
+    scale = 1 << zoom
+    siny = math.sin(lat * math.pi / 180)
+
+    # Truncating to 0.9999 effectively limits latitude to 89.189. This is
+    # about a third of a tile past the edge of the world tile.
+    siny = min(max(siny, -0.9999), 0.9999)
+
+    x = TILE_SIZE * (0.5 + lng / 360)
+    y = TILE_SIZE * (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi))
+    tile_x = math.floor(x*scale / TILE_SIZE)
+    tile_y = math.floor(y*scale / TILE_SIZE)
+    pixel_x = math.floor(x*scale) % TILE_SIZE
+    pixel_y = math.floor(y*scale) % TILE_SIZE
+
+    return (int(tile_x), int(tile_y), int(pixel_x), int(pixel_y))
+
+def tile_coordinates_to_world_coordinates(tile_x, tile_y, pixel_x, pixel_y, zoom=20, TILE_SIZE=256):
+    scale = float(1 << zoom)
+    x = (tile_x*TILE_SIZE + pixel_x) / scale
+    y = (tile_y*TILE_SIZE + pixel_y) / scale
+    k = math.exp(-(y / TILE_SIZE - 0.5) * (4 * math.pi))
+    lng = (x / TILE_SIZE - 0.5) * 360.0
+    lat = math.asin((k-1) / (1+k)) * 180.0 / math.pi
+    return lat, lng
 
 
 class SmoothedValue(object):

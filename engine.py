@@ -18,43 +18,60 @@ from torch_geometric.utils import negative_sampling
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 import pickle
+from util import box_ops
 
 
-def get_link_labels(pos_edge_index, neg_edge_index):
-    
-    E = pos_edge_index.size(1) + neg_edge_index.size(1)
-    link_labels = torch.zeros(E, dtype=torch.float)
-    link_labels[:pos_edge_index.size(1)] = 1.
-    return link_labels
-
-def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target_indices_ls):
+def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target_indices_ls, target_sizes):
     x_feat = []
+    geo_feat = []
+
+    bbox = []
+    geo_proj = []
+
     edge_index = [[],[]]
-    # pos_edge_index = [[],[]]
-    # neg_edge_index = [[],[]]
     num_features = 0
     y_gt = []
 
-    # prob = F.softmax(features[0]['pred_logits'], -1)
-    # scores, labels = prob[..., :-1].max(-1)
-    # # print(scores, labels)
-    # threshed = torch.gt(scores, 0.5)
-    # print(scores[threshed])
-    # print(target_indices_ls)
+    cxcywh_bbox = []
+    xyxy_bbox = []
+    pred_geo = []
+    pred_geo_norm = []
+
     for i in range(len(features)):
         num_features += features[i]["feats_last_layer"][0].shape[0]
         start = i*features[i]["feats_last_layer"][0].shape[0]
-
         for j in range(len(indices_ls[i][0][0])):
             indices_ls[i][0][0][j] += start
             indices_ls[i][0][1][j] += start
 
         x_feat.append(features[i]["feats_last_layer"][0])
+        cxcywh_bbox.append(features[i]["pred_boxes"][0])
+        boxes = box_ops.box_cxcywh_to_xyxy(features[i]["pred_boxes"])
+        img_h, img_w = target_sizes[i].unbind(0)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=0)
+        boxes = boxes * scale_fct
+        xyxy_bbox.append(boxes[0])
+
+        for bbox in boxes[0]:
+            p_lat, p_lng = box_ops.streetview_pixel_to_world_coordinates((bbox[0]+bbox[2])/2, bbox[3], geo_samples[i][2], img_w, img_h, geo_samples[i][0], geo_samples[i][1], height=0)
+            pred_geo.append([p_lat, p_lng])
+            x, y, z = box_ops.get_cartesian(p_lat, p_lng)
+            pred_geo_norm.append([x, y, z])
+        
 
     x_feat = torch.stack(x_feat)
     x_feat = torch.reshape(x_feat, (num_features, 256)).float()
 
+    cxcywh_bbox = torch.stack(cxcywh_bbox)
+    cxcywh_bbox = torch.reshape(cxcywh_bbox, (num_features, 4)).float()
+
+    xyxy_bbox = torch.stack(xyxy_bbox)
+    xyxy_bbox = torch.reshape(xyxy_bbox, (num_features, 4)).float()
+    
+
     for i in range(x_feat.shape[0]):
+        g1 = (i // 20)
+        geo_feat.append(geo_samples[g1])
         for j in range(x_feat.shape[0]):
             if i != j:
                 utils.append_to_edge_index(edge_index, i, j)
@@ -75,15 +92,23 @@ def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target
                     y_gt.extend([0, 0])
                     # utils.append_to_edge_index(neg_edge_index, i, j)
 
-    # geos = torch.from_numpy(np.asarray(geos)).double()
-    
-    edge_index = torch.from_numpy(np.asarray(edge_index)).long()    
-    # pos_edge_index = torch.from_numpy(np.asarray(pos_edge_index)).long()
-    # neg_edge_index = torch.from_numpy(np.asarray(neg_edge_index)).long()
+    edge_index = torch.from_numpy(np.asarray(edge_index)).long()
     y_gt = torch.from_numpy(np.asarray(y_gt)).double()
+
+    # print(torch.nonzero(y_gt).shape, y_gt.shape)
+
+    geo_feat = torch.as_tensor(np.array(geo_feat)).float()
+    pred_geo_norm = torch.as_tensor(np.array(pred_geo_norm)).float()
+    pred_geo = torch.as_tensor(np.array(pred_geo)).float()
+
     data = Data(edge_index=edge_index, 
                 x=x_feat, 
-                y=y_gt)
+                y=y_gt,
+                geo_x=geo_feat,
+                xyxy_bbox=xyxy_bbox,
+                cxcywh_bbox=cxcywh_bbox,
+                pred_geo_norm=pred_geo_norm,
+                pred_geo=pred_geo)
     return data
 
 def compute_loss_bce(outputs, gt, device):
@@ -121,14 +146,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     for samples, geo_samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
-        geo_samples = geo_samples.to(device)
+
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
-        graph_sample = graph_data_generator(outputs, geo_samples, indices_ls, num_boxes_ls, target_indices_ls)
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        graph_sample = graph_data_generator(outputs, geo_samples, indices_ls, num_boxes_ls, target_indices_ls, orig_target_sizes)
         graph_sample = graph_sample.to(device)
 
-        gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index).to(device)
+        gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index, graph_sample.pred_geo_norm).to(device)
 
         loss_bce = compute_loss_bce(gnn_out, graph_sample.y, device)
 
@@ -153,7 +179,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         loss_value = loss_bce + loss_value
         
-
         losses.backward(retain_graph=True)
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
@@ -183,13 +208,14 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
     counter = 0
     grapher = []
-    for samples, targets in metric_logger.log_every(data_loader, 10, header):
+    for samples, geo_samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         outputs = model(samples)
         loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
-        graph_sample = graph_data_generator(outputs, indices_ls, num_boxes_ls, target_indices_ls)
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        graph_sample = graph_data_generator(outputs, geo_samples, indices_ls, num_boxes_ls, target_indices_ls, orig_target_sizes)
         graph_sample = graph_sample.to(device)
 
         # gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index).to(device)
@@ -209,14 +235,15 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device):
                              **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
 
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        
         results = postprocessors['bbox'](outputs, orig_target_sizes)
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
         thresh_dets = coco_evaluator.eval_imgs["bbox"][0][0][0][0]
-        print(thresh_dets)
+
+        # print(thresh_dets)
         # detections_identified = []
         # detections_key = {}
         # for det in thresh_dets:

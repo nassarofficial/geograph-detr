@@ -36,10 +36,10 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             ann_ids = self.coco.getAnnIds(imgIds=img_id)
             target = self.coco.loadAnns(ann_ids)
             path = self.coco.loadImgs(img_id)[0]['file_name']
-            geo_lat = self.coco.loadImgs(img_id)[0]['pano_lat']
-            geo_lng = self.coco.loadImgs(img_id)[0]['pano_lng']
-            geo_deg = self.coco.loadImgs(img_id)[0]['projection']['pano_yaw_deg']
-            geo = np.array([geo_lat, geo_lng, geo_deg])
+            geo_lat = float(self.coco.loadImgs(img_id)[0]['pano_lat'])
+            geo_lng = float(self.coco.loadImgs(img_id)[0]['pano_lng'])
+            geo_deg = float(self.coco.loadImgs(img_id)[0]['projection']['pano_yaw_deg'])
+            geo = np.asarray([geo_lat, geo_lng, geo_deg])
             img = Image.open(os.path.join(self.root, path)).convert('RGB')
 
             image_id = img_id

@@ -33,8 +33,9 @@ from torch_geometric.utils import (negative_sampling, remove_self_loops,
 from torch_geometric.data import DataLoader, Dataset
 from torch_cluster import knn_graph
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
-from torch_geometric.nn import MessagePassing, GCNConv
+from torch_geometric.nn import MessagePassing, GCNConv, PPFConv, PointConv
 from torch_geometric.nn.inits import reset
+from torch_geometric.nn import global_mean_pool
 
 command = 'nvidia-smi'
 
@@ -407,22 +408,40 @@ class GNNNet(torch.nn.Module):
     def __init__(self, out_channels):
         super().__init__()
 
-        self.conv1 = EdgeConv(256, 64)
-        self.bn1 = BatchNorm1d(64)
-        self.conv6 = EdgeConv(64, out_channels)
-        self.pool = EdgePooling(out_channels, add_to_edge_score=0)
+        #1
+        # self.conv1 = EdgeConv(256, 64)
+        # self.bn1 = BatchNorm1d(64)
+        # self.conv6 = EdgeConv(64, out_channels)
+        self.edge_pool = EdgePooling(out_channels, add_to_edge_score=0)
+
+        #2
+        nn = Seq(Lin(256+3, 64), ReLU(), Lin(64, 64))
+        self.conv1 = PointConv(local_nn=nn)
+
+        nn = Seq(Lin(67, 32), ReLU(), Lin(32, 32))
+        self.conv2 = PointConv(local_nn=nn)
+
+        self.lin1 = Lin(32, 16)
 
     def reset_parameters(self):
         for conv in self.convs:
             conv.reset_parameters()
         self.lin1.reset_parameters()
             
-    def forward(self, x, edge_index):
-        x = F.relu(self.conv1(x, edge_index))
-        x = F.dropout(x, training = self.training)
-        x = self.bn1(x)
-        x = self.conv6(x, edge_index)
-        x, edge_index, edge_scores = self.pool(x, edge_index)
+    def forward(self, x, edge_index, pos):
+        # 1
+        # x = F.relu(self.conv1(x, edge_index))
+        # x = F.dropout(x, training = self.training)
+        # x = self.bn1(x)
+        # x = self.conv6(x, edge_index)
+        # x, edge_index, edge_scores = self.edge_pool(x, edge_index)
+
+        x = F.relu(self.conv1(x, pos, edge_index))
+        x = F.relu(self.conv2(x, pos, edge_index))
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.lin1(x)
+        x, edge_index, edge_scores = self.edge_pool(x, edge_index)
+        # print(edge_scores)
         return edge_scores
 
 
@@ -453,7 +472,7 @@ def build(args):
 
     matcher = build_matcher(args)
 
-    gnn_model = GNNNet(16)
+    gnn_model = GNNNet(16).float()
 
     # gnn_model = GAE(GCN(256, 16))
 
