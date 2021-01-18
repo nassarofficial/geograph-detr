@@ -66,11 +66,7 @@ class HungarianMatcher(nn.Module):
         tgt_ids = torch.cat([v["labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
         tgt_det_key = torch.cat([v["det_key"] for v in targets])
-        # print("----------------------------------------")
-        # print(targets)
-        # print("Out: tgt_bbox", tgt_bbox)
-        # print("Out: tgt_ids", tgt_ids)
-        # print("Out: tgt_det_key", tgt_det_key)
+        tgt_geo_gt = torch.cat([v["loc_gt"] for v in targets])
 
         # Compute the classification cost. Contrary to the loss, we don't use the NLL,
         # but approximate it in 1 - proba[target class].
@@ -94,8 +90,9 @@ class HungarianMatcher(nn.Module):
         # print("Out: indices", indices)
         
         target_idxs = [tgt_det_key[indices[i][1]] for i in range(len(indices))] 
+        target_geos = [tgt_geo_gt[indices[i][1]] for i in range(len(indices))]
 
-        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices], target_idxs
+        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices], target_idxs, target_geos
 
 
 def build_matcher(args):

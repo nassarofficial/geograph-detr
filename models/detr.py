@@ -39,6 +39,39 @@ from torch_geometric.nn import global_mean_pool
 
 command = 'nvidia-smi'
 
+class GeoReg(nn.Module):
+    """ This is the GeoRegression module that finetuning the pred """
+    ## revisit for batching properly
+    def __init__(self, out):
+        super().__init__()
+        self.camera_height = 3
+        self.pitch = 0
+        self.out = out
+        self.linear1 = torch.nn.Linear(256+3+4, 128+3+4)
+        self.linear2 = torch.nn.Linear(128+3+4, 128+3+4)
+        self.bn1 = torch.nn.BatchNorm1d(128+3+4)
+        self.linear3 = torch.nn.Linear(128+3+4, 3)
+
+        # self.conv1 = nn.Conv2d(256+2+4, 128+2+4, 3)
+        # self.conv2 = nn.Conv2d(128+2+4, 64+2+4, 3)
+        # self.fc1 = nn.Linear(64+2+4,32+2+4)
+        # self.fc2 = nn.Linear(32+2+4, 16+2+4)
+        # self.fc3 = nn.Linear(16, 2)
+
+    def forward(self, x_feat, pred_geo, cxcywh_bbox):
+        pred_x = []
+        # print("------: ",len(x_feat), len(pred_geo))
+        for i in range(len(x_feat)):
+            x = torch.cat((x_feat[i], pred_geo[i]), 0)
+            x = torch.cat((x, cxcywh_bbox[i]), 0)
+            x = F.relu(self.linear1(x))
+            x = F.relu(self.linear2(x))
+            x = self.linear3(x)
+            pred_x.append(x)
+        pred_x = torch.stack(pred_x)
+        pred_x = torch.reshape(pred_x, (len(x_feat), 3))
+        return pred_x
+
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -261,12 +294,12 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         losses = {}
-        indices_ls, num_boxes_ls, target_indices_ls = [], [], [] 
+        indices_ls, num_boxes_ls, target_indices_ls, target_geos_ls = [], [], [], [] 
         for i in range(len(outputs)):
             outputs_without_aux = {k: v for k, v in outputs[i].items() if k != 'aux_outputs'}
             target_inst = [targets[i]]
             # Retrieve the matching between the outputs of the last layer and the targets
-            indices, target_indices = self.matcher(outputs_without_aux, target_inst)
+            indices, target_indices, target_geos = self.matcher(outputs_without_aux, target_inst)
 
             # Compute the average number of target boxes accross all nodes, for normalization purposes
             num_boxes = sum(len(t["labels"]) for t in target_inst)
@@ -277,6 +310,7 @@ class SetCriterion(nn.Module):
             indices_ls.append(indices) 
             num_boxes_ls.append(num_boxes)
             target_indices_ls.append(target_indices)
+            target_geos_ls.append(target_geos)
         # Compute all the requested losses
             for loss in self.losses:
                 losses.update(self.get_loss(loss, outputs[i], target_inst, indices, num_boxes))
@@ -284,7 +318,7 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
             if 'aux_outputs' in outputs[i]:
                 for i, aux_outputs in enumerate(outputs[i]['aux_outputs']):
-                    indices, target_indices = self.matcher(aux_outputs, target_inst)
+                    indices, target_indices, target_geos = self.matcher(aux_outputs, target_inst)
                     for loss in self.losses:
                         if loss == 'masks':
                             # Intermediate masks losses are too costly to compute, we ignore them.
@@ -297,7 +331,7 @@ class SetCriterion(nn.Module):
                         l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                         losses.update(l_dict)
 
-        return losses, indices_ls, num_boxes_ls, target_indices_ls
+        return losses, indices_ls, num_boxes_ls, target_indices_ls, target_geos_ls
 
 
 class PostProcess(nn.Module):
@@ -474,6 +508,7 @@ def build(args):
 
     gnn_model = GNNNet(16).float()
 
+    geo_model = GeoReg(2).float()
     # gnn_model = GAE(GCN(256, 16))
 
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
@@ -489,9 +524,12 @@ def build(args):
 
     losses = ['labels', 'boxes', 'cardinality']
 
+    geo_loss = nn.MSELoss()
+    geo_loss.to(device)
+    
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses, gnn_model=gnn_model)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
 
-    return model, gnn_model, criterion, postprocessors
+    return model, gnn_model, geo_model, criterion, geo_loss, postprocessors

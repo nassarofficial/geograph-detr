@@ -20,6 +20,32 @@ from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 import pickle
 from util import box_ops
 
+def geo_reg(outputs, geo_samples, target_sizes):
+    xyxy_bbox = []
+    cxcywh_bbox = []
+    pred_geo = []
+    pred_geo_norm = []
+    x_feat = []
+    geo_feat = []
+    num_features = 0
+    print("len(outputs): ", len(outputs))
+    for i in range(len(outputs)):
+        num_features += outputs[i]["feats_last_layer"][0].shape[0]
+        x_feat.append(outputs[i]["feats_last_layer"][0])
+        cxcywh_bbox.append(outputs[i]["pred_boxes"][0])
+        boxes = box_ops.box_cxcywh_to_xyxy(outputs[i]["pred_boxes"])
+        img_h, img_w = target_sizes[i].unbind(0)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=0)
+        boxes = boxes * scale_fct
+        xyxy_bbox.append(boxes[0])
+
+        for bbox in boxes[0]:
+            p_lat, p_lng = box_ops.streetview_pixel_to_world_coordinates((bbox[0]+bbox[2])/2, bbox[3], geo_samples[i][2], img_w, img_h, geo_samples[i][0], geo_samples[i][1], height=0)
+            pred_geo.append([p_lat, p_lng])
+            x, y, z = box_ops.get_cartesian(p_lat, p_lng)
+            pred_geo_norm.append([x, y, z])
+
+    return x_feat, pred_geo, cxcywh_bbox
 
 def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target_indices_ls, target_sizes):
     x_feat = []
@@ -36,6 +62,8 @@ def graph_data_generator(features, geo_samples, indices_ls, num_boxes_ls, target
     xyxy_bbox = []
     pred_geo = []
     pred_geo_norm = []
+
+    objs = 20
 
     for i in range(len(features)):
         num_features += features[i]["feats_last_layer"][0].shape[0]
@@ -129,12 +157,27 @@ def compute_loss_bce(outputs, gt, device):
                                                     pos_weight= pos_weight)
     return loss
 
+def reg_gt_gen(detects, indices_ls, target_geo_ls):
+    gt_geo = np.zeros((len(indices_ls)*detects,2), dtype=np.float32)
+    gt_geo_norm = np.zeros((len(indices_ls)*detects,3), dtype=np.float32)
+    for i in range(len(indices_ls)):
+        for j in range(len(target_geo_ls[i][0])):
+            if target_geo_ls[i][0][j][0] != 0:
+                x, y, z = box_ops.get_cartesian(target_geo_ls[i][0][j][0].cpu(), target_geo_ls[i][0][j][1].cpu())
+                gt_geo[(i*10)+j][0] = target_geo_ls[i][0][j][0]
+                gt_geo[(i*10)+j][1] = target_geo_ls[i][0][j][1]
+                gt_geo_norm[(i*10)+j][0] = x
+                gt_geo_norm[(i*10)+j][1] = y
+                gt_geo_norm[(i*10)+j][2] = z
+    return gt_geo_norm
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+
+def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, geo_loss: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, model_gnn: torch.nn.Module, epoch: int, max_norm: float = 0):
+                    device: torch.device, model_gnn: torch.nn.Module, model_geo: torch.nn.Module, epoch: int, max_norm: float = 0):
     model.train()
     criterion.train()
+    geo_loss.train()
     model_gnn.train()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -144,21 +187,68 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
+    detects = 20
+    pred_geooo = []
+    gt_geooo = []
+    counter = 0
     for samples, geo_samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
 
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # print(targets)
         outputs = model(samples)
-        loss_dict, indices_ls, num_boxes_ls, target_indices_ls = criterion(outputs, targets)
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+
+        # x_feat, pred_geo, cxcywh_bbox = geo_reg(outputs, geo_samples, orig_target_sizes)
+
+
+        loss_dict, indices_ls, num_boxes_ls, target_indices_ls, target_geo_ls = criterion(outputs, targets)
+        
+        # print("-----: ", indices_ls)
+        # print("-----: ", num_boxes_ls)
+        # print("-----: ", target_indices_ls)
+        # print("-----: ", target_geo_ls)
+
         graph_sample = graph_data_generator(outputs, geo_samples, indices_ls, num_boxes_ls, target_indices_ls, orig_target_sizes)
         graph_sample = graph_sample.to(device)
+
+        # print(target_indices_ls)
+        # print(graph_sample.x, graph_sample.pred_geo, graph_sample.cxcywh_bbox)
+        pred_geo = model_geo(graph_sample.x, graph_sample.pred_geo_norm, graph_sample.cxcywh_bbox)
+
+
+        gt_geo_norm = reg_gt_gen(detects, indices_ls, target_geo_ls)
+        ids_z = torch.from_numpy(np.where(gt_geo_norm[:,0] != 0)[0]).to(device)
+        # gt_gt = torch.from_numpy(gt_gt).to(device)
+        gt_geo_norm = torch.from_numpy(gt_geo_norm).to(device)
+
+        pred_geo = torch.index_select(pred_geo, 0, ids_z)
+        gt_geo_norm = torch.index_select(gt_geo_norm, 0, ids_z)
+
+        pred_geooo.append(pred_geo)
+        gt_geooo.append(gt_geo_norm)
+
+        if counter == 3:
+            pickle.dump( pred_geooo, open( "pred_geooo.p", "wb" ) )
+            pickle.dump( gt_geooo, open( "gt_geooo.p", "wb" ) )
+
+        counter = counter + 1
+
+        loss_geo = geo_loss(pred_geo, gt_geo_norm)
 
         gnn_out = model_gnn(graph_sample.x, graph_sample.edge_index, graph_sample.pred_geo_norm).to(device)
 
         loss_bce = compute_loss_bce(gnn_out, graph_sample.y, device)
 
+        loss_dict['graph_loss'] = loss_bce
+
+        loss_dict['geo_loss'] = loss_geo
+
         weight_dict = criterion.weight_dict
+
+        print("----- losses: ", loss_dict.keys())
+        # print("----- weight_dict: ", weight_dict.keys())
+
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)

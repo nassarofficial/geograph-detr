@@ -48,10 +48,10 @@ def get_args_parser():
     parser.add_argument('--num_features', default=256, type=int)
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=3, type=int,
-                        help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=3, type=int,
-                        help="Number of decoding layers in the transformer")
+    parser.add_argument('--enc_layers', default=1, type=int,
+                        help="Number of encoding layers in the transformer") # 3
+    parser.add_argument('--dec_layers', default=1, type=int,
+                        help="Number of decoding layers in the transformer") # 3
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
     parser.add_argument('--hidden_dim', default=256, type=int,
@@ -129,13 +129,15 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, gnn_model, criterion, postprocessors = build_model(args)
+    model, gnn_model, geo_model, criterion, geo_loss, postprocessors = build_model(args)
 
     model.to(device)
     gnn_model.to(device)
+    geo_model.to(device)
 
     model_without_ddp = model
     gnn_model_without_ddp = gnn_model
+    geo_model_without_ddp = geo_model
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
@@ -143,6 +145,9 @@ def main(args):
         
         gnn_model = torch.nn.parallel.DistributedDataParallel(gnn_model, device_ids=[args.gpu])
         gnn_model_without_ddp = gnn_model.module
+
+        geo_model = torch.nn.parallel.DistributedDataParallel(geo_model, device_ids=[args.gpu])
+        geo_model_without_ddp = geo_model.module
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
@@ -210,7 +215,7 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, gnn_model, epoch,
+            model, criterion, geo_loss, data_loader_train, optimizer, device, gnn_model, geo_model, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:
